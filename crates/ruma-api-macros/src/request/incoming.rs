@@ -2,21 +2,17 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
 use super::{Request, RequestField, RequestFieldKind};
-use crate::api::metadata::{AuthScheme, Metadata};
+use crate::auth_scheme::AuthScheme;
 
 impl Request {
-    pub fn expand_incoming(
-        &self,
-        metadata: &Metadata,
-        error_ty: &TokenStream,
-        ruma_api: &TokenStream,
-    ) -> TokenStream {
+    pub fn expand_incoming(&self, ruma_api: &TokenStream) -> TokenStream {
         let http = quote! { #ruma_api::exports::http };
         let percent_encoding = quote! { #ruma_api::exports::percent_encoding };
         let ruma_serde = quote! { #ruma_api::exports::ruma_serde };
         let serde_json = quote! { #ruma_api::exports::serde_json };
 
-        let method = &metadata.method;
+        let method = &self.method;
+        let error_ty = &self.error_ty;
 
         let incoming_request_type =
             if self.contains_lifetimes() { quote!(IncomingRequest) } else { quote!(Request) };
@@ -25,7 +21,7 @@ impl Request {
         // except this one. If we get errors about missing fields in IncomingRequest for
         // a path field look here.
         let (parse_request_path, path_vars) = if self.has_path_fields() {
-            let path_string = metadata.path.value();
+            let path_string = self.path.value();
 
             assert!(path_string.starts_with('/'), "path needs to start with '/'");
             assert!(
@@ -215,16 +211,12 @@ impl Request {
             self.vars(RequestFieldKind::Body, quote!(request_body))
         };
 
-        let non_auth_impls = metadata.authentication.iter().filter_map(|auth| {
-            matches!(auth.value, AuthScheme::None(_)).then(|| {
-                let attrs = &auth.attrs;
-                quote! {
-                    #( #attrs )*
-                    #[automatically_derived]
-                    #[cfg(feature = "server")]
-                    impl #ruma_api::IncomingNonAuthRequest for #incoming_request_type {}
-                }
-            })
+        let non_auth_impl = matches!(self.authentication, AuthScheme::None(_)).then(|| {
+            quote! {
+                #[automatically_derived]
+                #[cfg(feature = "server")]
+                impl #ruma_api::IncomingNonAuthRequest for #incoming_request_type {}
+            }
         });
 
         quote! {
@@ -262,7 +254,7 @@ impl Request {
                 }
             }
 
-            #(#non_auth_impls)*
+            #non_auth_impl
         }
     }
 
